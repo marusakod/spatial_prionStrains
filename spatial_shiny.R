@@ -3,6 +3,7 @@
 library(Seurat)
 library(tidyverse)
 library(shiny)
+library(patchwork)
 
 all_spatial <- readRDS("all_spatial_seurat_normalized.rds")
 allen_cortex <-  readRDS("allen_cortex.rds")
