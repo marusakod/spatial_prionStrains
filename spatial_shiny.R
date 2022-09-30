@@ -4,11 +4,54 @@ library(Seurat)
 library(tidyverse)
 library(shiny)
 library(patchwork)
+library(strex)
+library(DT)
 
 all_spatial <- readRDS("all_spatial_seurat_normalized.rds")
 allen_cortex <-  readRDS("allen_cortex.rds")
+Brain_regions_DE_results <- readRDS("Brain_regions_DE_results.rds")
+all_SVFs <- readRDS("all_SVFs.rds")
+spatial_merged <- readRDS("spatial_merged.rds")
+
 all_spatial_gene_symbols <- rownames(GetAssayData(all_spatial$RML6, assay = "Spatial", slot ="counts"))
 all_reference_symbols <- rownames(allen_cortex)
+simages <- Images(spatial_merged)
+names(simages) <- names(all_spatial)
+
+
+# all unique brain regions in DE results
+
+Brain_regions <- sapply(Brain_regions_DE_results, FUN = names, simplify = TRUE)
+Brain_regions <- sapply(Brain_regions, str_after_nth, pattern = "_", n = 2, simplify = TRUE)
+Brain_regions <- Reduce(unique, Brain_regions)
+
+# add comparison and brain regions to DE results
+
+complete_DE_results <- function(DE_list){
+  names <- names(DE_list)
+  comparisons <- str_before_nth(names, pattern = "_", n =2 )
+  regions <- str_after_nth(names, pattern = "_", n = 2)
+  
+  for(i in 1:length(DE_list)){
+    DE_list[[i]]$comparison <- comparisons[i]
+    DE_list[[i]]$region <- regions[i]
+    DE_list[[i]]$gene <- rownames(DE_list[[i]])
+  }
+  
+  DE_list
+}
+
+Brain_regions_DE_results_completed <- sapply(Brain_regions_DE_results, 
+                                             FUN = complete_DE_results, 
+                                             simplify = FALSE, 
+                                             USE.NAMES = TRUE)
+
+Brain_regions_DE_results_completed_merged <- unlist(Brain_regions_DE_results_completed, recursive = FALSE)
+Brain_regions_DE_results_completed_merged <- bind_rows(Brain_regions_DE_results_completed_merged) %>% as_tibble()
+Brain_regions_DE_results_completed_merged$comparison <- gsub("_", " vs ", Brain_regions_DE_results_completed_merged$comparison)
+
+
+
 
 ui <- fluidPage(tabsetPanel(
   tabPanel("Gene search", 
@@ -76,7 +119,41 @@ ui <- fluidPage(tabsetPanel(
              mainPanel = mainPanel(width = 10, 
                                    plotOutput("refPlot", width = "800px", height = "700px"), 
                                    plotOutput("cellInSpatial", width = "1200px", height = "1200px"))
-           ))
+           )), 
+  tabPanel("Brain Regions DE", 
+           value = "regions_DE", 
+           sidebarLayout(
+             sidebarPanel = sidebarPanel(width = 2,
+                                         selectInput("selectComparison", 
+                                                     "Select Comparison", 
+                                                     choices = unique(Brain_regions_DE_results_completed_merged$comparison), 
+                                                     selected = "NBH vs RML6", 
+                                                     multiple = FALSE, 
+                                                     width = "200px"), 
+                                         selectInput("selectRegion", 
+                                                     "Select brain region", 
+                                                     choices = Brain_regions, 
+                                                     selected = "Thalamic_Nuclei", 
+                                                     multiple = FALSE, 
+                                                     width = "200px")), 
+             mainPanel = mainPanel(width = 10, 
+                                   plotOutput("comparison1_plot"), 
+                                   plotOutput("comparison2_plot"), 
+                                   dataTableOutput("DE_table"))
+           )), 
+  tabPanel("Spatially variable features", 
+           value = "SVFs", 
+           sidebarLayout(
+             sidebarPanel = sidebarPanel(width = 2, 
+                                         radioButtons("SVF_strain", 
+                                                      "Select strain", 
+                                                      choices = names(all_spatial), 
+                                                      selected = "NBH", 
+                                                      width = "200px")), 
+             mainPanel = mainPanel(dataTableOutput("SVF_table"), 
+                                   plotOutput("SVF_plot", width = "1200px", height = "1500px"))
+           )
+           )
   )
 )
 
@@ -176,6 +253,68 @@ output$refPlot <- renderPlot({
 
 output$cellInSpatial <- renderPlot({
   SpatialFeaturePlot(all_spatial[[input$strainToIntegrate]], features = input$cellToDisplay , pt.size.factor = 1.6, ncol = 2, crop = TRUE)
+})
+
+
+# DIFFERENTIAL EXPRESSION RESULTS FOR BRAIN REGIONS TAB
+
+comparison1 <- reactive({
+  str_before_first(input$selectComparison, pattern = " vs ")
+})
+
+comparison2 <- reactive({
+  str_after_first(input$selectComparison, pattern = " vs ")
+})
+
+
+# plot with brain regions colored in each strain in comparison
+
+spatial_merged_reactive <- reactive({
+  spatial_merged@meta.data <- spatial_merged@meta.data %>% mutate(Selected_region = case_when(Brain.Regions_new == input$selectRegion ~ input$selectRegion, 
+                                                                                             TRUE ~ "other"))
+  spatial_merged
+})
+
+
+output$comparison1_plot <- renderPlot({
+ 
+  SpatialDimPlot(spatial_merged_reactive(), images = simages[comparison1()], group.by = "Selected_region") + theme(legend.position = "none")
+})
+
+output$comparison2_plot <- renderPlot({
+  SpatialDimPlot(spatial_merged_reactive(), images = simages[comparison2()], group.by = "Selected_region") + theme(legend.position = "none")
+  
+})
+
+
+# filter DE results based on the region and comparison selected
+output$DE_table  <- renderDataTable({
+  
+  Brain_regions_DE_results_completed_merged %>% filter(comparison == input$selectComparison, region == input$selectRegion)
+  
+})
+
+
+# SPATIALLY VARIABLE FEATURES TAB
+
+output$SVF_table <- renderDataTable({
+  
+  all_SVFs %>% filter(Strain == input$SVF_strain)
+  
+})
+
+# display top 10 spatially variable features
+
+output$SVF_plot <- renderPlot({
+  
+  top_10_svf <- head(all_SVFs %>%
+                       filter(Strain == input$SVF_strain) %>% 
+                       dplyr::select("gene") %>% 
+                       flatten_chr(),
+                       n = 10)
+
+  SpatialFeaturePlot(all_spatial[[input$SVF_strain]], features = top_10_svf, ncol = 3, alpha = c(0.1, 1))
+  
 })
 
 
