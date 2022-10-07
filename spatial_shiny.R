@@ -12,6 +12,13 @@ allen_cortex <-  readRDS("allen_cortex.rds")
 Brain_regions_DE_results <- readRDS("Brain_regions_DE_results.rds")
 all_SVFs <- readRDS("all_SVFs.rds")
 spatial_merged <- readRDS("spatial_merged.rds")
+Brain_regions_DE_withinSlice_res <- readRDS("Brain_regions_DE_withinSlice_res.rds")
+all_ORA_results_between_strains_dfs <- readRDS("all_ORA_results_between_strains_dfs.rds")
+all_ORA_results_within_strains_dfs <- readRDS("all_ORA_results_within_strains_dfs.rds")
+
+all_ORA_results_between_strains_dfs_merged <- bind_rows(all_ORA_results_between_strains_dfs)
+all_ORA_results_within_strains_dfs_merged <- bind_rows(all_ORA_results_within_strains_dfs)
+
 
 all_spatial_gene_symbols <- rownames(GetAssayData(all_spatial$RML6, assay = "Spatial", slot ="counts"))
 all_reference_symbols <- rownames(allen_cortex)
@@ -50,6 +57,17 @@ Brain_regions_DE_results_completed_merged <- unlist(Brain_regions_DE_results_com
 Brain_regions_DE_results_completed_merged <- bind_rows(Brain_regions_DE_results_completed_merged) %>% as_tibble()
 Brain_regions_DE_results_completed_merged$comparison <- gsub("_", " vs ", Brain_regions_DE_results_completed_merged$comparison)
 
+
+# get unique brain regions for each strain (used as conditional select input for within slide DEA results tab)
+strainSpecific_brainregions <- names(Brain_regions_DE_withinSlice_res)
+names(strainSpecific_brainregions) <- gsub("[.].*", "", strainSpecific_brainregions)
+strainSpecific_brainregions <- gsub(".*[.]", "", strainSpecific_brainregions)
+strainSpecific_brainregions_list <- sapply(names(all_spatial), FUN = function(x){ 
+                                     y <- strainSpecific_brainregions[names(strainSpecific_brainregions) == x]
+                                     y <- unname(y)
+                                     y
+                                     }
+                                     , simplify = FALSE)
 
 
 
@@ -139,8 +157,37 @@ ui <- fluidPage(tabsetPanel(
              mainPanel = mainPanel(width = 10, 
                                    plotOutput("comparison1_plot"), 
                                    plotOutput("comparison2_plot"), 
-                                   dataTableOutput("DE_table"))
-           )), 
+                                   dataTableOutput("DE_table"), 
+                                   dataTableOutput("GO_results_between"))
+           )),
+  tabPanel("Brain Regions within slice DE", 
+           value = "within_slice_regions_DE", 
+           sidebarLayout(
+             sidebarPanel = sidebarPanel(with = 2, 
+                                         radioButtons("selectStrain", 
+                                                      "select Strain", 
+                                                      choices = names(all_spatial), 
+                                                      selected = "NBH", 
+                                                      width = "200px"), 
+                                         uiOutput("selectRegionOneSlice")), 
+             mainPanel = mainPanel(dataTableOutput("withinSlice_DEgenes"), 
+                                   dataTableOutput("GO_results_within")), 
+                                   
+           )
+           
+  ), 
+  tabPanel("Module scores", 
+           value = "module_scores", 
+           sidebarLayout(
+             sidebarPanel = sidebarPanel(width = 2, 
+                             radioButtons("selectGO", 
+                                          "Select_Gene_Ontology_term", 
+                                          choices = c("Neuron Apoptotic Process" = "neuron_apoptotic_process1", 
+                                                      "Neuroinflammatory response" = "neuroinflammatory_response2"), 
+                                          width = "200px")), 
+             mainPanel = mainPanel(plotOutput("moduleScores_plot", width = "1500px", height = "800px"))
+           )
+           ), 
   tabPanel("Spatially variable features", 
            value = "SVFs", 
            sidebarLayout(
@@ -151,7 +198,7 @@ ui <- fluidPage(tabsetPanel(
                                                       selected = "NBH", 
                                                       width = "200px")), 
              mainPanel = mainPanel(dataTableOutput("SVF_table"), 
-                                   plotOutput("SVF_plot", width = "1200px", height = "1500px"))
+                                   plotOutput("SVF_plot", width = "800px", height = "700px"))
            )
            )
   )
@@ -295,6 +342,54 @@ output$DE_table  <- renderDataTable({
 })
 
 
+output$GO_results_between <- renderDataTable({
+  
+  all_ORA_results_between_strains_dfs_merged %>% filter(comparison == gsub(" vs ", "_", input$selectComparison), brainRegion == input$selectRegion)
+  
+})
+
+
+
+
+# BRAIN REGIONS WITHIN SLICE DE TAB
+
+# populate select input with brain regions that exist in selected strain
+output$selectRegionOneSlice <-renderUI({
+  
+  selectInput("RegionOneSlice", 
+              "Select brain region", 
+              choices = strainSpecific_brainregions_list[[input$selectStrain]], 
+              multiple = FALSE, 
+              width = "200px")
+})
+
+# get the correct table from DE results based on brain region and strain selected
+
+output$withinSlice_DEgenes <- renderDataTable({
+  Brain_regions_DE_withinSlice_res[[paste(input$selectStrain, input$RegionOneSlice, sep = ".")]]
+})
+
+# table with within slice DE results
+
+output$GO_results_within <- renderDataTable({
+  
+  all_ORA_results_within_strains_dfs_merged %>% filter(comparison == input$selectStrain, brainRegion == input$RegionOneSlice)
+  
+})
+
+
+
+
+# MODULE SCORE TAB 
+
+output$moduleScores_plot <- renderPlot({
+  
+  SpatialFeaturePlot(spatial_merged, features = input$selectGO)
+  
+})
+
+
+
 # SPATIALLY VARIABLE FEATURES TAB
 
 output$SVF_table <- renderDataTable({
@@ -316,6 +411,7 @@ output$SVF_plot <- renderPlot({
   SpatialFeaturePlot(all_spatial[[input$SVF_strain]], features = top_10_svf, ncol = 3, alpha = c(0.1, 1))
   
 })
+
 
 
 
