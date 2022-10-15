@@ -9,15 +9,22 @@ library(DT)
 
 all_spatial <- readRDS("all_spatial_seurat_normalized.rds")
 allen_cortex <-  readRDS("allen_cortex.rds")
-Brain_regions_DE_results <- readRDS("Brain_regions_DE_results.rds")
+
+BIGBrain_regions_DE_results <- readRDS("BIGBrain_regions_DE_results.rds")
+
 all_SVFs <- readRDS("all_SVFs.rds")
 spatial_merged <- readRDS("spatial_merged.rds")
-Brain_regions_DE_withinSlice_res <- readRDS("Brain_regions_DE_withinSlice_res.rds")
-all_ORA_results_between_strains_dfs <- readRDS("all_ORA_results_between_strains_dfs.rds")
-all_ORA_results_within_strains_dfs <- readRDS("all_ORA_results_within_strains_dfs.rds")
 
-all_ORA_results_between_strains_dfs_merged <- bind_rows(all_ORA_results_between_strains_dfs)
-all_ORA_results_within_strains_dfs_merged <- bind_rows(all_ORA_results_within_strains_dfs)
+BIGBrain_regions_DE_withinSlice_res <- readRDS("BIGBrain_regions_DE_withinSlice_res.rds")
+
+BIGRegions_ORA_results_between_strains_dfs <- readRDS("BIGRegions_ORA_results_between_strains_dfs.rds")
+BIGRegions_ORA_results_within_strains_dfs <- readRDS("BIGRegions_ORA_results_within_strains_dfs.rds")
+
+BIGRegions_ORA_results_between_strains_dfs_merged<- bind_rows(BIGRegions_ORA_results_between_strains_dfs )
+BIGRegions_ORA_results_within_strains_dfs_merged <- bind_rows(BIGRegions_ORA_results_within_strains_dfs)
+BIGRegions_ORA_results_within_strains_dfs_merged <- BIGRegions_ORA_results_within_strains_dfs_merged %>% unite(comparison ,
+                                                                                                               c("comparison", "brainRegion"),
+                                                                                                               sep = "." )
 
 
 all_spatial_gene_symbols <- rownames(GetAssayData(all_spatial$RML6, assay = "Spatial", slot ="counts"))
@@ -28,9 +35,8 @@ names(simages) <- names(all_spatial)
 
 # all unique brain regions in DE results
 
-Brain_regions <- sapply(Brain_regions_DE_results, FUN = names, simplify = TRUE)
+Brain_regions <- sapply(X = BIGBrain_regions_DE_results, FUN = names, simplify = TRUE)
 Brain_regions <- sapply(Brain_regions, str_after_nth, pattern = "_", n = 2, simplify = TRUE)
-Brain_regions <- Reduce(unique, Brain_regions)
 
 # add comparison and brain regions to DE results
 
@@ -48,7 +54,7 @@ complete_DE_results <- function(DE_list){
   DE_list
 }
 
-Brain_regions_DE_results_completed <- sapply(Brain_regions_DE_results, 
+Brain_regions_DE_results_completed <- sapply(BIGBrain_regions_DE_results, 
                                              FUN = complete_DE_results, 
                                              simplify = FALSE, 
                                              USE.NAMES = TRUE)
@@ -59,7 +65,7 @@ Brain_regions_DE_results_completed_merged$comparison <- gsub("_", " vs ", Brain_
 
 
 # get unique brain regions for each strain (used as conditional select input for within slide DEA results tab)
-strainSpecific_brainregions <- names(Brain_regions_DE_withinSlice_res)
+strainSpecific_brainregions <- names(BIGBrain_regions_DE_withinSlice_res)
 names(strainSpecific_brainregions) <- gsub("[.].*", "", strainSpecific_brainregions)
 strainSpecific_brainregions <- gsub(".*[.]", "", strainSpecific_brainregions)
 strainSpecific_brainregions_list <- sapply(names(all_spatial), FUN = function(x){ 
@@ -68,6 +74,10 @@ strainSpecific_brainregions_list <- sapply(names(all_spatial), FUN = function(x)
                                      y
                                      }
                                      , simplify = FALSE)
+
+# get brain regions that the selected region can be compared to
+brainRegions_for_comparison  <- sapply(BIGBrain_regions_DE_withinSlice_res, names, simplify = FALSE)
+brainRegions_for_comparison <- sapply(brainRegions_for_comparison, FUN = function(x){str_after_first(x, pattern = "[.]")}, simplify = FALSE)
 
 
 
@@ -148,12 +158,8 @@ ui <- fluidPage(tabsetPanel(
                                                      selected = "NBH vs RML6", 
                                                      multiple = FALSE, 
                                                      width = "200px"), 
-                                         selectInput("selectRegion", 
-                                                     "Select brain region", 
-                                                     choices = Brain_regions, 
-                                                     selected = "Thalamic_Nuclei", 
-                                                     multiple = FALSE, 
-                                                     width = "200px")), 
+                                         uiOutput("selectBetweenSlice")
+                                         ), 
              mainPanel = mainPanel(width = 10, 
                                    plotOutput("comparison1_plot"), 
                                    plotOutput("comparison2_plot"), 
@@ -169,7 +175,8 @@ ui <- fluidPage(tabsetPanel(
                                                       choices = names(all_spatial), 
                                                       selected = "NBH", 
                                                       width = "200px"), 
-                                         uiOutput("selectRegionOneSlice")), 
+                                         uiOutput("selectRegionOneSlice"), 
+                                         uiOutput("selectComparisonRegion")), 
              mainPanel = mainPanel(dataTableOutput("withinSlice_DEgenes"), 
                                    dataTableOutput("GO_results_within")), 
                                    
@@ -185,7 +192,7 @@ ui <- fluidPage(tabsetPanel(
                                           choices = c("Neuron Apoptotic Process" = "neuron_apoptotic_process1", 
                                                       "Neuroinflammatory response" = "neuroinflammatory_response2"), 
                                           width = "200px")), 
-             mainPanel = mainPanel(plotOutput("moduleScores_plot", width = "1500px", height = "800px"))
+             mainPanel = mainPanel(plotOutput("moduleScores_plot", width = "1300px", height = "3000px"))
            )
            ), 
   tabPanel("Spatially variable features", 
@@ -232,12 +239,34 @@ output$spatial_plot <- renderPlot({
       xlab(NULL)
   }else{
   f <- function(srat, strain){
+    # get maximum expression of a gene in all strains
+    
+    all_gene_counts <- sapply(all_spatial, FUN = function(x){ 
+      mx <- GetAssayData(x, assay = "SCT")
+      mx2 <- GetAssayData(x, assay = "Spatial")
+      
+      if(input$geneSymbolSpatial %in% rownames(mx)){
+        y <- mx[input$geneSymbolSpatial, ]
+      }else{
+        y <- mx2[input$geneSymbolSpatial, ]
+      }
+      y
+      
+      }, simplify = FALSE)
+    
+    all_gene_counts_merged <- unlist(all_gene_counts)
+    max  <- max(all_gene_counts_merged)
+    
     SpatialFeaturePlot(srat,
                        features = input$geneSymbolSpatial, 
                        pt.size.factor = input$sizeSpatialSpot, 
                        alpha = input$alphaSpatialSpot, 
-                       image.alpha = input$alphaSpatialImage) + ggtitle(strain) + theme(plot.title = element_text(size = 16))
-  }
+                       image.alpha = input$alphaSpatialImage) + ggtitle(strain) + 
+      theme(plot.title = element_text(size = 16)) +
+      scale_fill_gradientn(colours= rev(brewer.pal(name = "Spectral", n = 11)),
+                           breaks=c(0,0.5,1),
+                           limits=c(0,max))
+  } 
   
   p_list <- mapply(srat = all_spatial, 
               strain = names(all_spatial), 
@@ -305,6 +334,19 @@ output$cellInSpatial <- renderPlot({
 
 # DIFFERENTIAL EXPRESSION RESULTS FOR BRAIN REGIONS TAB
 
+
+# populate select input with brain regions that can be compared between 2 slices
+output$selectBetweenSlice <-renderUI({
+  
+  selectInput("BetweenSliceRegion", 
+              "SelectRegion", 
+              choices = Brain_regions[[gsub(" vs ", "_", input$selectComparison)]], 
+              multiple = FALSE, 
+              width = "200px")
+  
+})
+
+
 comparison1 <- reactive({
   str_before_first(input$selectComparison, pattern = " vs ")
 })
@@ -317,7 +359,7 @@ comparison2 <- reactive({
 # plot with brain regions colored in each strain in comparison
 
 spatial_merged_reactive <- reactive({
-  spatial_merged@meta.data <- spatial_merged@meta.data %>% mutate(Selected_region = case_when(Brain.Regions_new == input$selectRegion ~ input$selectRegion, 
+  spatial_merged@meta.data <- spatial_merged@meta.data %>% dplyr::mutate(Selected_region = case_when(Big.Brain.Regions == input$BetweenSliceRegion ~ input$BetweenSliceRegion,
                                                                                              TRUE ~ "other"))
   spatial_merged
 })
@@ -325,11 +367,13 @@ spatial_merged_reactive <- reactive({
 
 output$comparison1_plot <- renderPlot({
  
-  SpatialDimPlot(spatial_merged_reactive(), images = simages[comparison1()], group.by = "Selected_region") + theme(legend.position = "none")
+  SpatialDimPlot(spatial_merged_reactive(), images = simages[comparison1()], group.by = "Selected_region") + theme(legend.position = "none") +
+    scale_fill_manual(values = c("grey", "#F35D6D"), breaks = c("other", input$BetweenSliceRegion))
 })
 
 output$comparison2_plot <- renderPlot({
-  SpatialDimPlot(spatial_merged_reactive(), images = simages[comparison2()], group.by = "Selected_region") + theme(legend.position = "none")
+  SpatialDimPlot(spatial_merged_reactive(), images = simages[comparison2()], group.by = "Selected_region") + theme(legend.position = "none") +
+    scale_fill_manual(values= c("grey", "#F35D6D"), breaks = c("other", input$BetweenSliceRegion))
   
 })
 
@@ -337,14 +381,14 @@ output$comparison2_plot <- renderPlot({
 # filter DE results based on the region and comparison selected
 output$DE_table  <- renderDataTable({
   
-  Brain_regions_DE_results_completed_merged %>% filter(comparison == input$selectComparison, region == input$selectRegion)
+  Brain_regions_DE_results_completed_merged %>% filter(comparison == input$selectComparison, region == input$BetweenSliceRegion)
   
 })
 
 
 output$GO_results_between <- renderDataTable({
   
-  all_ORA_results_between_strains_dfs_merged %>% filter(comparison == gsub(" vs ", "_", input$selectComparison), brainRegion == input$selectRegion)
+  BIGRegions_ORA_results_between_strains_dfs_merged %>% filter(comparison == gsub(" vs ", "_", input$selectComparison), brainRegion == input$BetweenSliceRegion)
   
 })
 
@@ -357,23 +401,44 @@ output$GO_results_between <- renderDataTable({
 output$selectRegionOneSlice <-renderUI({
   
   selectInput("RegionOneSlice", 
-              "Select brain region", 
+              "Compare", 
               choices = strainSpecific_brainregions_list[[input$selectStrain]], 
               multiple = FALSE, 
               width = "200px")
+  
 })
+
+output$selectComparisonRegion <- renderUI({
+
+selectInput("RegionOneSlice2", 
+            "To", 
+            choices = brainRegions_for_comparison[[paste(input$selectStrain, input$RegionOneSlice, sep = ".")]], 
+            multiple = FALSE, 
+            width = "200px")
+
+})
+
 
 # get the correct table from DE results based on brain region and strain selected
 
 output$withinSlice_DEgenes <- renderDataTable({
-  Brain_regions_DE_withinSlice_res[[paste(input$selectStrain, input$RegionOneSlice, sep = ".")]]
+  
+  x <- BIGBrain_regions_DE_withinSlice_res[[paste(input$selectStrain, input$RegionOneSlice, sep = ".")]]
+  y <- x[[paste(input$selectStrain, input$RegionOneSlice2, sep = ".")]]
+  y
+  
+  
 })
 
 # table with within slice DE results
 
 output$GO_results_within <- renderDataTable({
   
-  all_ORA_results_within_strains_dfs_merged %>% filter(comparison == input$selectStrain, brainRegion == input$RegionOneSlice)
+  BIGRegions_ORA_results_within_strains_dfs_merged %>% filter(comparison == paste(input$selectStrain,
+                                                                           input$RegionOneSlice,
+                                                                           input$selectStrain, 
+                                                                           input$RegionOneSlice2,
+                                                                           sep = "."))
   
 })
 
@@ -384,8 +449,33 @@ output$GO_results_within <- renderDataTable({
 
 output$moduleScores_plot <- renderPlot({
   
-  SpatialFeaturePlot(spatial_merged, features = input$selectGO)
+  feature <- spatial_merged@meta.data[, input$selectGO]
+  min <- min(feature)
+  max <- max(feature)
   
+  if(input$selectGO == "neuroinflammatory_response2"){
+    title <- "Neuroinflammation score"
+    breaks <- c(-0.05, 0.1)
+  }else{
+    title <- "Neuron Apoptotic Process score"
+    breaks <- c(0, 0.05, 0.1)
+  }
+  
+  
+  p_list <- sapply(simages, FUN = function(x){
+    
+    SpatialFeaturePlot(spatial_merged, features = input$selectGO, images = x) + labs(fill = title) + 
+    scale_fill_gradientn(colours= rev(brewer.pal(name = "Spectral", n = 11)),
+                         breaks= breaks,
+                         limits= c(min, max))
+    
+    
+  }, 
+  simplify = FALSE)
+  
+  p <- wrap_plots(p_list[[1]], p_list[[2]], p_list[[3]], p_list[[4]], ncol = 1)
+  
+  p
 })
 
 
