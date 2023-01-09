@@ -27,7 +27,7 @@ all_SVFs <- readRDS("all_SVFs.rds")
 all_SVFs_merged <- bind_rows(all_SVFs)
 
 # get all gene symbols for select imput in Gene Search tab
-all_spatial_gene_symbols <- rownames(GetAssayData(all_spatial_seurat_normalizedNBH_30, assay = "Spatial", slot ="counts"))
+all_spatial_gene_symbols <- rownames(GetAssayData(all_spatial_seurat_normalized$NBH_30, assay = "Spatial", slot ="counts"))
 
 
 simages <- mapply(x = seurat_merged_timepoints, name = names(seurat_merged_timepoints), FUN =  function(x, name){
@@ -303,7 +303,7 @@ output$comparison1_plot <- renderPlot({
 
 
 output$comparison2_plot <- renderPlot({
-  SpatialDimPlot(spatial_merged_reactive(), images = simages_reactive()[1], group.by = "Selected_region") + theme(legend.position = "none") +
+  SpatialDimPlot(spatial_merged_reactive(), images = simages_reactive()[2], group.by = "Selected_region") + theme(legend.position = "none") +
     scale_fill_manual(values= c("grey", "#F35D6D"), breaks = c("other", input$BetweenSliceRegion))
 
 })
